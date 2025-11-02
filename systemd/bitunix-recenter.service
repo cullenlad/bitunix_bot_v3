@@ -1,0 +1,11 @@
+[Unit]
+Description=BitUnix Grid Re-center (runs ./recenter.sh)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=ianms
+WorkingDirectory=/home/ianms/bitunix-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ianms/bitunix-bot/recenter.sh
+Nice=5
+Restart=no

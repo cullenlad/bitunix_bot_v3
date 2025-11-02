@@ -1,0 +1,13 @@
+[Unit]
+Description=BitUnix Drawdown Watchdog
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=ianms
+WorkingDirectory=/home/ianms/bitunix-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ianms/bitunix-bot/.venv/bin/python /home/ianms/bitunix-bot/watchdog_drawdown.py
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
