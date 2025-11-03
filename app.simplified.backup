@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+import os, sys, time, subprocess, json
+from flask import Flask, request, jsonify, render_template_string
+from dotenv import load_dotenv
+load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_URL = "https://fapi.bitunix.com"
+
+app = Flask(__name__)
+
+# === Utility Functions ===
+
+def run_cmd(cmd):
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=BASE_DIR)
+    out, _ = p.communicate()
+    return out.decode()
+
+def set_env(key, value):
+    lines = []
+    env_path = os.path.join(BASE_DIR, ".env")
+    with open(env_path, "r") as f:
+        lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(key + "="):
+            lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}\n")
+    with open(env_path, "w") as f:
+        f.writelines(lines)
+    os.environ[key] = value
+
+# === Routes ===
+
+@app.route("/")
+def index():
+    html = """
+    <html><head><title>BitUnix Grid Panel</title></head>
+    <body>
+    <h2>BitUnix Grid Bot Control Panel</h2>
+    <form method="post" action="/golive">
+        <label>Leverage: </label>
+        <input name="leverage" type="number" value="{{leverage}}" min="1" max="100"><br><br>
+        <button type="submit">Go Live + Place Grid</button>
+    </form>
+    <form method="post" action="/dryrun"><button>Dry Run</button></form>
+    <form method="post" action="/killswitch"><button>Kill Switch</button></form>
+    <form method="post" action="/status"><button>Status</button></form>
+    </body></html>
+    """
+    leverage = os.getenv("LEVERAGE", "2")
+    return render_template_string(html, leverage=leverage)
+
+@app.post("/dryrun")
+def dryrun():
+    set_env("LIVE", "0")
+    return run_cmd([sys.executable, "gridbot_v2.py"])
+
+@app.post("/golive")
+def golive():
+    v = request.form.get("leverage", None)
+    if v:
+        set_env("LEVERAGE", v)
+    set_env("LIVE", "1")
+    return run_cmd([sys.executable, "gridbot_v2.py"])
+
+@app.post("/killswitch")
+def killswitch():
+    return run_cmd([sys.executable, "killswitch.py"])
+
+@app.post("/status")
+def status():
+    from gridbot_v2 import SYMBOL, _get
+    j = _get("/api/v1/futures/market/tickers", {"symbols": SYMBOL})
+    return jsonify(j)
+
+# === New Route: Apply Leverage via API ===
+@app.post("/apply_leverage")
+def apply_leverage():
+    v = int(request.json.get("leverage", 3))
+    from gridbot_v2 import _post, change_leverage, SYMBOL
+    out = {}
+    try:
+        # Step 1: cancel all open orders
+        out["cancel"] = _post("/api/v1/futures/trade/cancel_all_orders", {"symbol": SYMBOL})
+    except Exception as e:
+        out["cancel"] = {"error": str(e)}
+
+    time.sleep(0.2)
+    try:
+        # Step 2: apply leverage change
+        out["set"] = change_leverage(SYMBOL, v)
+    except Exception as e:
+        out["set"] = {"error": str(e)}
+
+    return jsonify(out)
+
+# === Flask Entry ===
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)

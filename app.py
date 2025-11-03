@@ -20,23 +20,29 @@ def read_env():
     return d
 
 def set_env(k,v):
-    d=read_env(); d[k]=str(v)
-    order=["BITUNIX_API_KEY","BITUNIX_API_SECRET","ACCOUNT_USDT","SYMBOL","GRID_LEVELS","GRID_SPACING_PCT","ORDER_NOTIONAL_PCT","MIN_QTY","LEVERAGE","MAX_GRID_NOTIONAL_USDT","LIVE","STATUS_POLL_SEC","BT_TIMEFRAME","BT_LIMIT","MAKER_FEE_PCT","TAKER_FEE_PCT","CHECK_INTERVAL_SEC","MAX_DRAWDOWN_USDT","TREND_WINDOW_MIN","TREND_THRESHOLD_PCT","PORT","PANEL_USER","PANEL_PASS"]
+    d=read_env()
+    d[k]=str(v)
+    order = ["BITUNIX_API_KEY","BITUNIX_API_SECRET","ACCOUNT_USDT","SYMBOL","GRID_LEVELS","GRID_SPACING_PCT","ORDER_NOTIONAL_PCT","MIN_QTY","LEVERAGE","MAX_GRID_NOTIONAL_USDT","LIVE","STATUS_POLL_SEC","BT_TIMEFRAME","BT_LIMIT","MAKER_FEE_PCT","TAKER_FEE_PCT","CHECK_INTERVAL_SEC","MAX_DRAWDOWN_USDT","PORT","PANEL_USER","PANEL_PASS"]
     seen=set(); lines=[]
     for k0 in order:
-        if k0 in d: lines.append(f"{k0}={d[k0]}\n"); seen.add(k0)
+        if k0 in d:
+            lines.append(f"{k0}={d[k0]}\n"); seen.add(k0)
     for k0,v0 in d.items():
-        if k0 not in seen: lines.append(f"{k0}={v0}\n")
-    open(ENV_PATH,'w').writelines(lines); load_dotenv(override=True)
+        if k0 not in seen:
+            lines.append(f"{k0}={v0}\n")
+    open(ENV_PATH,'w').writelines(lines)
+    load_dotenv(override=True)
 
 def run_cmd(cmd):
     p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,cwd=BASE_DIR)
-    out=p.communicate()[0].decode('utf-8','ignore'); return out
+    out=p.communicate()[0].decode('utf-8','ignore')
+    return out
 
 def _now_ms(): return str(int(time.time()*1000))
 def _nonce(): return ''.join(random.choices(string.ascii_letters+string.digits,k=32))
 def _sha(s): return hashlib.sha256(s.encode('utf-8')).hexdigest()
-def _sign(nonce,ts,qp,body,key,secret): d=_sha(nonce+ts+key+qp+body); return _sha(d+secret)
+def _sign(nonce,ts,qp,body,key,secret):
+    d=_sha(nonce+ts+key+qp+body); return _sha(d+secret)
 
 def bu_get(path,params):
     env=read_env(); key=env.get('BITUNIX_API_KEY',''); secret=env.get('BITUNIX_API_SECRET','')
@@ -57,21 +63,29 @@ def fetch_unrealised():
     try:
         j=bu_get('/api/v1/futures/account/positions',{"symbol":sym,"marginCoin":"USDT"})
         total=Decimal('0')
-        for pos in j.get('data') or []: total+=Decimal(str(pos.get('unrealisedPnl','0')))
+        for pos in j.get('data') or []:
+            total+=Decimal(str(pos.get('unrealisedPnl','0')))
         return total
-    except Exception: return Decimal('0')
+    except Exception:
+        return Decimal('0')
 
-# Basic auth
-def need_auth(): env=read_env(); return bool(env.get('PANEL_USER')) and bool(env.get('PANEL_PASS'))
-def check_auth(a): 
-    if not a: return False
-    env=read_env(); return a.username==env.get('PANEL_USER') and a.password==env.get('PANEL_PASS')
-from flask import Response
+# ---------- BASIC AUTH ----------
+def need_auth():
+    env=read_env(); return bool(env.get('PANEL_USER')) and bool(env.get('PANEL_PASS'))
+def check_auth(auth):
+    if not auth: return False
+    env=read_env()
+    return auth.username==env.get('PANEL_USER') and auth.password==env.get('PANEL_PASS')
+def auth_required():
+    return Response('Authentication required', 401, {'WWW-Authenticate':'Basic realm="GridPanel"'})
 @app.before_request
 def guard():
-    if not need_auth(): return
-    if request.authorization and check_auth(request.authorization): return
-    return Response('Authentication required',401,{'WWW-Authenticate':'Basic realm="GridPanel"'})
+    if not need_auth():
+        return
+    if request.authorization and check_auth(request.authorization):
+        return
+    return auth_required()
+# --------------------------------
 
 LOG_PATH=os.path.join(BASE_DIR,'status.csv')
 def logger_loop():
@@ -81,12 +95,12 @@ def logger_loop():
             with open(LOG_PATH,'a') as f: f.write(f"{ts},{p},{u}\n")
         except Exception: pass
         time.sleep(int(read_env().get('STATUS_POLL_SEC','60')))
-import threading; threading.Thread(target=logger_loop,daemon=True).start()
+threading.Thread(target=logger_loop,daemon=True).start()
 
 INDEX_HTML='''<!doctype html><html><head><meta charset="utf-8"><title>BitUnix Grid Control</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-body{font-family:sans-serif;max-width:880px;margin:20px auto;padding:10px}
+body{font-family:sans-serif;max-width:820px;margin:20px auto;padding:10px}
 fieldset{border:1px solid #ddd;padding:12px;border-radius:10px;margin-bottom:12px}
 label{display:block;margin:6px 0 2px}
 input,select{padding:8px;border:1px solid #ccc;border-radius:8px;width:100%}
@@ -116,10 +130,6 @@ pre{background:#f6f6f6;padding:10px;border-radius:10px;overflow:auto}
   <div><label>STATUS_POLL_SEC</label><input id="STATUS_POLL_SEC" type="number" step="1" min="10"></div>
   <div><label>SYMBOL</label><input id="SYMBOL" type="text"></div>
 </div>
-<div class="row">
-  <div><label>TREND_WINDOW_MIN</label><input id="TREND_WINDOW_MIN" type="number" step="1" min="3"></div>
-  <div><label>TREND_THRESHOLD_PCT</label><input id="TREND_THRESHOLD_PCT" type="number" step="0.1" min="0.1"></div>
-</div>
 <button onclick="save()">Save Settings</button>
 <span class="small">Saving updates the .env file immediately.</span>
 </fieldset>
@@ -141,10 +151,9 @@ async function loadConfig(){
   const set=(id,def)=>{ const el=document.getElementById(id); if(!el) return; const v=cfg[id]??def; if(el.tagName==='SELECT'){ [...el.options].forEach(o=>o.selected=(o.value==v||o.text==v)); } else { el.value=v??''; } }
   set('GRID_LEVELS','1'); set('ORDER_NOTIONAL_PCT','0.07'); set('GRID_SPACING_PCT','0.25'); set('MAX_GRID_NOTIONAL_USDT','400');
   set('LEVERAGE','2'); set('LIVE','0'); set('STATUS_POLL_SEC','60'); set('SYMBOL','BTCUSDT');
-  set('TREND_WINDOW_MIN','10'); set('TREND_THRESHOLD_PCT','0.7');
 }
 async function save(){
-  const ids=['GRID_LEVELS','ORDER_NOTIONAL_PCT','GRID_SPACING_PCT','MAX_GRID_NOTIONAL_USDT','LEVERAGE','LIVE','STATUS_POLL_SEC','SYMBOL','TREND_WINDOW_MIN','TREND_THRESHOLD_PCT'];
+  const ids=['GRID_LEVELS','ORDER_NOTIONAL_PCT','GRID_SPACING_PCT','MAX_GRID_NOTIONAL_USDT','LEVERAGE','LIVE','STATUS_POLL_SEC','SYMBOL'];
   const payload={}; ids.forEach(id=>payload[id]=document.getElementById(id).value);
   const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   document.getElementById('out').textContent=await r.text();
@@ -156,22 +165,25 @@ loadConfig();
 '''
 
 @app.route('/')
-def index(): return render_template_string(INDEX_HTML)
+def index():
+    return render_template_string(INDEX_HTML)
 
 @app.route('/config')
-def config(): return jsonify(read_env())
+def config():
+    return jsonify(read_env())
 
 @app.route('/save',methods=['POST'])
 def save():
     data=request.get_json(force=True,silent=True) or {}
-    whitelist={"GRID_LEVELS":int,"ORDER_NOTIONAL_PCT":float,"GRID_SPACING_PCT":float,"MAX_GRID_NOTIONAL_USDT":float,"LEVERAGE":int,"LIVE":int,"STATUS_POLL_SEC":int,"SYMBOL":str,"TREND_WINDOW_MIN":int,"TREND_THRESHOLD_PCT":float}
+    whitelist={"GRID_LEVELS":int,"ORDER_NOTIONAL_PCT":float,"GRID_SPACING_PCT":float,"MAX_GRID_NOTIONAL_USDT":float,"LEVERAGE":int,"LIVE":int,"STATUS_POLL_SEC":int,"SYMBOL":str}
     for k,cast in whitelist.items():
         if k in data:
             try:
                 v = cast(data[k]) if cast!=str else str(data[k])
                 if k=="LIVE": v = 1 if int(v)==1 else 0
                 set_env(k,v)
-            except Exception: return jsonify({"error": f"bad value for {k}: {data[k]}"}), 400
+            except Exception:
+                return jsonify({"error": f"bad value for {k}: {data[k]}"}), 400
     return jsonify({"saved": True, "env": read_env()})
 
 @app.route('/status',methods=['POST'])
@@ -190,10 +202,12 @@ def golive():
     set_env('LIVE','1'); return run_cmd(['python','gridbot_v2.py'])
 
 @app.route('/recenter',methods=['POST'])
-def recenter(): return run_cmd(['./recenter.sh'])
+def recenter():
+    return run_cmd(['./recenter.sh'])
 
 @app.route('/killswitch',methods=['POST'])
-def killswitch(): return run_cmd(['python','killswitch.py'])
+def killswitch():
+    return run_cmd(['python','killswitch.py'])
 
 @app.route('/download')
 def download():

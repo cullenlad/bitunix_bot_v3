@@ -1,7 +1,7 @@
 .env
-status.csv
-last_center.json
+.venv/
+logs/
 __pycache__/
 *.pyc
-.venv/
-nohup.out
+*.log
+status.csv
