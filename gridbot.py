@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 import os, json, time, random, string, hashlib
 from decimal import Decimal, ROUND_DOWN
 import requests
@@ -95,7 +97,7 @@ def main():
             res = place_limit(SYMBOL, side, str(qty), str(p))
             placed.append({"side": side, "price": str(p), "qty": str(qty), "order": res})
         time.sleep(0.1)
-    print(json.dumps({"symbol": SYMBOL, "reference_price": str(px), "dry_run": DRY_RUN, "orders": placed}, indent=2))
+logging.info(json.dumps({"symbol": SYMBOL, "reference_price": str(px), "dry_run": DRY_RUN, "orders": placed}, indent=2))
 
 if __name__ == "__main__":
     main()

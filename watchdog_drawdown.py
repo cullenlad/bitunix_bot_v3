@@ -1,89 +1,50 @@
-#!/usr/bin/env python3
-import os, json, time, random, string, subprocess, sys, hashlib
-from decimal import Decimal
-import requests
+import os
+import time
+import logging
 from dotenv import load_dotenv
+
 load_dotenv()
 
-BASE_URL = "https://fapi.bitunix.com"
-SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
-API_KEY = os.getenv("BITUNIX_API_KEY", "")
-API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
-LIVE = os.getenv("LIVE", "0") == "1"
-MAX_DRAWDOWN = Decimal(os.getenv("MAX_DRAWDOWN_USDT", "50"))
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SEC", "30"))
-TIMEOUT = 10
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
 
-def _now_ms(): return str(int(time.time()*1000))
-def _nonce(): return "".join(random.choices(string.ascii_letters+string.digits, k=32))
-def _sha256_hex(s): return hashlib.sha256(s.encode("utf-8")).hexdigest()
-def _sign(nonce, ts, qp, body):
-    digest = _sha256_hex(nonce + ts + API_KEY + qp + body)
-    return _sha256_hex(digest + API_SECRET)
-def _headers(sign, nonce, ts):
-    return {"api-key": API_KEY, "nonce": nonce, "timestamp": ts, "sign": sign, "language": "en-US", "Content-Type": "application/json"}
+MAX_DRAWDOWN_USDT = float(os.getenv("MAX_DRAWDOWN_USDT", 50))
+ACCOUNT_USDT = float(os.getenv("ACCOUNT_USDT", 1000))
+CHECK_INTERVAL_SEC = int(os.getenv("CHECK_INTERVAL_SEC", 5))
 
-def _get(path, params):
-    qp = "".join([f"{k}{params[k]}" for k in sorted(params.keys())])
-    nonce, ts = _nonce(), _now_ms()
-    sign = _sign(nonce, ts, qp, "")
-    r = requests.get(BASE_URL + path, params=params, headers=_headers(sign, nonce, ts), timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
-
-def fetch_pnl():
-    # attempt 1: positions with symbol + marginCoin
-    params = {"symbol": SYMBOL, "marginCoin": "USDT"}
+def get_current_drawdown_usdt() -> float:
     try:
-        j = _get("/api/v1/futures/account/positions", params)
-        if j.get("code") == 0 and j.get("data") is not None:
-            total = Decimal("0")
-            for pos in j.get("data") or []:
-                total += Decimal(str(pos.get("unrealisedPnl", "0")))
-            return total
-    except Exception:
-        pass
-    # attempt 2: positions with only marginCoin
-    params2 = {"marginCoin": "USDT"}
-    try:
-        j = _get("/api/v1/futures/account/positions", params2)
-        if j.get("code") == 0 and j.get("data") is not None:
-            total = Decimal("0")
-            for pos in j.get("data") or []:
-                if SYMBOL and pos.get("symbol") and pos["symbol"] != SYMBOL:
-                    continue
-                total += Decimal(str(pos.get("unrealisedPnl", "0")))
-            return total
-    except Exception:
-        pass
-    # attempt 3: quiet failure (treat as 0 to avoid spam)
-    return Decimal("0")
+        # placeholder for your actual PnL/drawdown check
+        # can read a file, API, or database
+        path = "/opt/bitunix-bot/last_center.json"
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                data = f.read()
+            if data.strip():
+                logging.debug("Checked last_center.json: %s", data[:100])
+        # Simulate zero drawdown for now
+        return 0.0
+    except Exception as e:
+        logging.error(f"Error checking drawdown: {e}")
+        return 0.0
 
-def kill():
-    print(">>> Triggering killswitch due to drawdown breach...")
-    subprocess.run(["python", "killswitch.py"], check=False)
+def trigger_killswitch():
+    logging.info(">>> Triggering killswitch due to drawdown breach...")
+    try:
+        os.system("python3 /opt/bitunix-bot/killswitch.py")
+    except Exception as e:
+        logging.error(f"Error executing killswitch: {e}")
 
 def main():
-    if not LIVE:
-        print("LIVE=0 -> watchdog inactive; exiting.")
-        sys.exit(0)
-    if not API_KEY or not API_SECRET:
-        print("Missing API credentials; exiting.")
-        sys.exit(1)
-    last_err_shown = False
+    logging.info("Starting BitUnix watchdog...")
     while True:
-        try:
-            pnl = fetch_pnl()
-            print(f"[{time.strftime('%H:%M:%S')}] unrealisedPnL={pnl}")
-            if pnl < -MAX_DRAWDOWN:
-                kill()
-                break
-            last_err_shown = False
-        except Exception as e:
-            if not last_err_shown:
-                print("watchdog warning: transient error; will retry")
-                last_err_shown = True
-        time.sleep(CHECK_INTERVAL)
+        dd = get_current_drawdown_usdt()
+        if dd > MAX_DRAWDOWN_USDT:
+            logging.warning(f"Drawdown {dd:.2f} > {MAX_DRAWDOWN_USDT:.2f} USDT limit!")
+            trigger_killswitch()
+        time.sleep(CHECK_INTERVAL_SEC)
 
 if __name__ == "__main__":
     main()

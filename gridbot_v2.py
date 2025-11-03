@@ -1,136 +1,106 @@
 #!/usr/bin/env python3
-import os, json, time, random, string, hashlib, requests
+import os, json, time, hashlib, random, string, logging
 from decimal import Decimal, ROUND_DOWN
+import requests
 from dotenv import load_dotenv
+from datetime import datetime
+
 load_dotenv()
 
-# === CONFIG ===
 BASE_URL = "https://fapi.bitunix.com"
 SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
-GRID_LEVELS = int(os.getenv("GRID_LEVELS", "20"))
-GRID_STEP_PCT = Decimal(os.getenv("GRID_STEP_PCT", "0.25"))
+GRID_LEVELS = int(os.getenv("GRID_LEVELS", "4"))
+GRID_SPACING_PCT = Decimal(os.getenv("GRID_SPACING_PCT", "0.2"))
 ACCOUNT_USDT = Decimal(os.getenv("ACCOUNT_USDT", "1000"))
 ORDER_NOTIONAL_PCT = Decimal(os.getenv("ORDER_NOTIONAL_PCT", "0.02"))
 MIN_QTY = Decimal(os.getenv("MIN_QTY", "0.001"))
-LEVERAGE = int(os.getenv("LEVERAGE", "10"))
-LIVE = os.getenv("LIVE", "0") == "1"
+DRY_RUN = os.getenv("LIVE", "0") != "1"
 
-API_KEY = os.getenv("BITUNIX_API_KEY", "")
-API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
-TIMEOUT = 10
+API_KEY = os.getenv("BITUNIX_API_KEY")
+API_SECRET = os.getenv("BITUNIX_API_SECRET")
 
-# === SIGNING HELPERS ===
-def _now_ms(): return str(int(time.time() * 1000))
-def _nonce(): return "".join(random.choices(string.ascii_letters + string.digits, k=32))
-def _sha256_hex(s): return hashlib.sha256(s.encode("utf-8")).hexdigest()
-def _sign(nonce, ts, qp, body):
-    digest = _sha256_hex(nonce + ts + API_KEY + qp + body)
-    return _sha256_hex(digest + API_SECRET)
+logging.basicConfig(filename="/opt/bitunix-bot/logs/gridbot.log",
+                    level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
+
+def _nonce():
+    return "".join(random.choices(string.ascii_letters + string.digits, k=32))
+
+def _timestamp():
+    return str(int(time.time() * 1000))
+
+def _sign(nonce, ts, body):
+    digest = hashlib.sha256((nonce + ts + API_KEY + body).encode()).hexdigest()
+    return hashlib.sha256((digest + API_SECRET).encode()).hexdigest()
+
 def _headers(sign, nonce, ts):
     return {
         "api-key": API_KEY,
+        "sign": sign,
         "nonce": nonce,
         "timestamp": ts,
-        "sign": sign,
         "language": "en-US",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
-# === HTTP HELPERS ===
-def _get(path, params=None):
-    r = requests.get(BASE_URL + path, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
-
-def _post(path, body_obj):
-    nonce, ts = _nonce(), _now_ms()
-    body = json.dumps(body_obj or {}, separators=(",", ":"))
-    sign = _sign(nonce, ts, "", body)
-    r = requests.post(BASE_URL + path, data=body, headers=_headers(sign, nonce, ts), timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
-
-# === TRADING HELPERS ===
-def get_last_price(symbol):
-    j = _get("/api/v1/futures/market/tickers", {"symbols": symbol})
-    rows = j.get("data") or []
-    for row in rows:
-        if row.get("symbol") == symbol:
-            return Decimal(str(row["lastPrice"]))
-    raise RuntimeError(f"Ticker not found for {symbol}: {j}")
-
-def change_leverage(symbol, leverage):
-    body = {
-        "symbol": symbol,
-        "leverage": int(leverage),
-        "marginCoin": "USDT"
-    }
+def get_price():
     try:
-        j = _post("/api/v1/futures/account/change_leverage", body)
-        print("Leverage API response:", j)
-        if j.get("code") == 0:
-            print(f"✓ Leverage set to {leverage}x for {symbol}")
-            return j
-        else:
-            raise RuntimeError(j)
+        r = requests.get(f"{BASE_URL}/api/v1/futures/market/tickers",
+                         params={"symbols": SYMBOL}, timeout=10)
+        data = r.json()
+        return Decimal(data["data"][0]["lastPrice"])
     except Exception as e:
-        raise RuntimeError({"error": str(e), "body": body})
+        logging.error(f"get_price() failed: {e}")
+        return None
 
-def truncate_qty(qty):
-    q = (Decimal(qty)).quantize(MIN_QTY, rounding=ROUND_DOWN)
-    return q if q >= MIN_QTY else MIN_QTY
+def place_order(side, qty, price=None, trade_side="OPEN", order_type="LIMIT"):
+    url = f"{BASE_URL}/api/v1/futures/trade/place_order"
+    body_dict = {"symbol": SYMBOL, "side": side, "qty": str(qty),
+                 "tradeSide": trade_side, "orderType": order_type}
+    if order_type == "LIMIT" and price is not None:
+        body_dict["price"] = str(price)
+        body_dict["effect"] = "GTC"
+    body = json.dumps(body_dict, separators=(",", ":"))
+    nonce, ts = _nonce(), _timestamp()
+    sign = _sign(nonce, ts, body)
+    headers = _headers(sign, nonce, ts)
+    try:
+        r = requests.post(url, headers=headers, data=body, timeout=10)
+        logging.info(f"POST /api/v1/futures/trade/place_order => {r.text}")
+        return r.json()
+    except Exception as e:
+        logging.error(f"place_order() failed: {e}")
+        return None
 
-def place_limit(symbol, side, qty, price):
-    body = {
-        "symbol": symbol,
-        "side": side,               # "BUY" | "SELL"
-        "price": str(price),
-        "qty": str(qty),
-        "tradeSide": "OPEN",
-        "orderType": "LIMIT",
-        "effect": "GTC",
-        "reduceOnly": False,
-        "clientId": f"grid_{int(time.time()*1000)}",
-    }
-    if not LIVE:
-        return {"dry_run": True, "body": body}
-    j = _post("/api/v1/futures/trade/place_order", body)
-    if j.get("code") != 0:
-        raise RuntimeError({"resp": j, "sent": body})
-    return j.get("data", {})
+def run_grid(mode="LIVE"):
+    price = get_price()
+    if price is None:
+        logging.error("Price fetch failed, aborting.")
+        return
+    logging.info(f"{mode} GRIDBOT for {SYMBOL} started")
+    spacing = GRID_SPACING_PCT / Decimal("100")
+    notional = ACCOUNT_USDT * ORDER_NOTIONAL_PCT
+    qty = (notional / price).quantize(MIN_QTY, rounding=ROUND_DOWN)
 
-def build_grid(px):
-    grid = []
+    prices = []
     for i in range(1, GRID_LEVELS + 1):
-        pct = GRID_STEP_PCT * i
-        buy_px = (px * (Decimal("1.0") - pct/Decimal("100"))).quantize(Decimal("0.1"))
-        sell_px = (px * (Decimal("1.0") + pct/Decimal("100"))).quantize(Decimal("0.1"))
-        grid.append(("BUY", buy_px))
-        grid.append(("SELL", sell_px))
-    return grid
+        prices.append((price * (1 - spacing * i)).quantize(Decimal("0.01")))
+        prices.append((price * (1 + spacing * i)).quantize(Decimal("0.01")))
 
-def main():
-    if not API_KEY or not API_SECRET:
-        raise SystemExit("Missing BITUNIX_API_KEY / BITUNIX_API_SECRET in .env")
-    px = get_last_price(SYMBOL)
-    print(f"Current {SYMBOL} price: {px}")
-    try:
-        change_leverage(SYMBOL, LEVERAGE)
-    except Exception as e:
-        print(f"Leverage change failed (continuing): {e}")
-    grid = build_grid(px)
-    notional_per_order = ACCOUNT_USDT * ORDER_NOTIONAL_PCT
-    placed = []
-    for side, p in grid:
-        qty = truncate_qty(notional_per_order / p)
-        try:
-            res = place_limit(SYMBOL, side, str(qty), str(p))
-            placed.append({"side": side, "price": str(p), "qty": str(qty), "result": res})
-            print(f"{side} {qty} @ {p} → {res}")
-        except Exception as e:
-            print(f"Order error: {e}")
-        time.sleep(0.08)
-    print(json.dumps({"symbol": SYMBOL, "ref_price": str(px), "orders": placed, "live": LIVE}, indent=2))
+    logging.info(f"Placing {len(prices)} orders around mid={price}")
+    for p in prices:
+        side = "BUY" if p < price else "SELL"
+        if DRY_RUN:
+            logging.info(f"[DRY RUN] {side.lower()} {qty} {SYMBOL} @ {p}")
+        else:
+            result = place_order(side, qty, p)
+            logging.info(f"Order API response: {result}")
+            try:
+                with open("/opt/bitunix-bot/orders.csv", "a") as f:
+                    f.write(f"{datetime.utcnow().isoformat()},{mode},{SYMBOL},{side},{p},{qty},{json.dumps(result)}\n")
+            except Exception:
+                pass
+    logging.info("Grid placement complete.")
 
 if __name__ == "__main__":
-    main()
+    run_grid("LIVE" if not DRY_RUN else "DRY-RUN")

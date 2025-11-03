@@ -1,0 +1,91 @@
+import os
+import json
+import threading
+import logging
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+# Load .env variables
+load_dotenv()
+
+# Flask app setup
+app = Flask(__name__)
+
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+
+# Basic Auth
+PANEL_USER = os.getenv("PANEL_USER", "admin")
+PANEL_PASS = os.getenv("PANEL_PASS", "password")
+
+def check_auth(username, password):
+    return username == PANEL_USER and password == PANEL_PASS
+
+def authenticate():
+    return jsonify({"error": "Authentication required"}), 401
+
+def requires_auth(func):
+    def wrapper(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/status", methods=["POST"])
+@requires_auth
+def status():
+    # Simulated bot status output
+    result = {
+        "LIVE": os.getenv("LIVE", "0"),
+        "SYMBOL": os.getenv("SYMBOL", "BTCUSDT"),
+        "price": "107000.0",
+        "unrealised": "0"
+    }
+    return jsonify(result)
+
+
+@app.route("/dryrun", methods=["POST"])
+@requires_auth
+def dryrun():
+    logging.info("Dry-run triggered via API.")
+    return jsonify({"message": "Dry-run started"})
+
+
+@app.route("/recenter", methods=["POST"])
+@requires_auth
+def recenter():
+    logging.info("Recenter triggered via API.")
+    return jsonify({"message": "Recenter executed"})
+
+
+@app.route("/killswitch", methods=["POST"])
+@requires_auth
+def killswitch():
+    logging.warning("Killswitch triggered via API.")
+    os.system("python3 /opt/bitunix-bot/killswitch.py &")
+    return jsonify({"message": "Killswitch triggered"})
+
+
+# Background logger loop (for demonstration)
+def logger_loop():
+    while True:
+        logging.debug("Panel heartbeat running...")
+        import time
+        time.sleep(60)
+
+threading.Thread(target=logger_loop, daemon=True).start()
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)

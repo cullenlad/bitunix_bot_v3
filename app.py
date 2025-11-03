@@ -1,3 +1,17 @@
+
+# --- requires_auth (autoinsert) ---
+import os
+from flask import request, jsonify
+
+def requires_auth(func):
+    def wrapper(*args, **kwargs):
+        auth = request.authorization
+        if not auth or auth.username != os.getenv("PANEL_USER","admin") or auth.password != os.getenv("PANEL_PASS","password"):
+            return jsonify({"error":"Authentication required"}), 401
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
+# --- end requires_auth ---
 #!/usr/bin/env python3
 from flask import Flask, request, jsonify, send_file, render_template_string, Response
 import os, subprocess, threading, time, json, requests, random, string, hashlib
@@ -33,10 +47,21 @@ def set_env(k,v):
     open(ENV_PATH,'w').writelines(lines)
     load_dotenv(override=True)
 
+import subprocess
+
 def run_cmd(cmd):
-    p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,cwd=BASE_DIR)
-    out=p.communicate()[0].decode('utf-8','ignore')
-    return out
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+    output = []
+    for line in process.stdout:
+        output.append(line)
+    process.wait()
+    return "".join(output)
+
 
 def _now_ms(): return str(int(time.time()*1000))
 def _nonce(): return ''.join(random.choices(string.ascii_letters+string.digits,k=32))
@@ -140,6 +165,7 @@ pre{background:#f6f6f6;padding:10px;border-radius:10px;overflow:auto}
 <button onclick="act('golive')">Go Live + Place Grid</button>
 <button onclick="act('recenter')">Re-center</button>
 <button onclick="act('killswitch')" style="background:#fee">Kill-Switch</button>
+        <a class="btn" href="/dashboard">📊 Dashboard</a>
 <a href="/download" style="margin-left:8px">Download status.csv</a>
 </div>
 
@@ -195,11 +221,11 @@ def status():
 
 @app.route('/dryrun',methods=['POST'])
 def dryrun():
-    set_env('LIVE','0'); return run_cmd(['python','gridbot_v2.py'])
+    set_env('LIVE','0'); return run_cmd(['/opt/bitunix-bot/venv/bin/python3','gridbot_latest.py'])
 
 @app.route('/golive',methods=['POST'])
 def golive():
-    set_env('LIVE','1'); return run_cmd(['python','gridbot_v2.py'])
+    set_env('LIVE','1'); return run_cmd(['/opt/bitunix-bot/venv/bin/python3','gridbot_latest.py'])
 
 @app.route('/recenter',methods=['POST'])
 def recenter():
@@ -207,7 +233,7 @@ def recenter():
 
 @app.route('/killswitch',methods=['POST'])
 def killswitch():
-    return run_cmd(['python','killswitch.py'])
+    return run_cmd(['/opt/bitunix-bot/venv/bin/python3','killswitch.py'])
 
 @app.route('/download')
 def download():
@@ -216,3 +242,140 @@ def download():
 
 if __name__=='__main__':
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8080')))
+
+# --- downloads: trades.csv and raw grid log ---
+from flask import send_file
+
+@app.route("/trades.csv", methods=["GET"])
+@requires_auth
+def download_trades_csv():
+    path = "/opt/bitunix-bot/logs/trades.csv"
+    if not os.path.exists(path):
+        return jsonify({"error":"No trades logged yet"}), 404
+    return send_file(path, as_attachment=True, download_name="trades.csv")
+
+@app.route("/gridlog.txt", methods=["GET"])
+@requires_auth
+def download_gridlog():
+    path = "/opt/bitunix-bot/logs/gridbot.log"
+    if not os.path.exists(path):
+        return jsonify({"error":"No grid log found"}), 404
+    return send_file(path, as_attachment=True, download_name="gridbot.log")
+# --- end downloads ---
+
+@app.route("/tail", methods=["GET"])
+@requires_auth
+def tail_log():
+    import html
+    path = "/opt/bitunix-bot/logs/gridbot.log"
+    n = int(request.args.get("n", "200"))
+    if not os.path.exists(path):
+        return jsonify({"error":"No grid log found"}), 404
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()[-max(1,n):]
+    # return as plain text (safe-escaped will happen in the page)
+    return Response("".join(lines), mimetype="text/plain")
+
+# 2) Lightweight dashboard page with a Download button + live log window
+@app.route("/dashboard", methods=["GET"])
+@requires_auth
+def dashboard():
+    html = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BitUnix Bot Dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .btn { padding:8px 12px; border:1px solid #444; border-radius:8px; text-decoration:none; color:#111; background:#f2f2f2; }
+    .btn:hover { background:#e8e8e8; }
+    #logbox { width:100%; height:360px; border:1px solid #aaa; border-radius:8px; padding:8px; overflow:auto; background:#0b0b0b; color:#e6e6e6; white-space:pre-wrap; }
+    small { color:#666; }
+  </style>
+</head>
+<body>
+  <h2>BitUnix Bot Dashboard</h2>
+  <div class="row" style="margin-bottom:10px">
+    <a class="btn" href="/trades.csv">⬇️ Download trades.csv</a>
+    <a class="btn" href="/gridlog.txt">⬇️ Download gridlog.txt</a>
+    <a class="btn" href="/">↩️ Back to Main Page</a>
+  </div>
+
+  <div class="row">
+    <div>
+      <strong>Live Log</strong> <small>(last <span id="nlines">200</span> lines, auto-refresh)</small>
+      <div id="logbox">Loading…</div>
+      <div class="row" style="margin-top:8px">
+        <label>Lines:&nbsp;<input id="lines" type="number" min="50" max="2000" step="50" value="200" style="width:80px"></label>
+        <button class="btn" id="refresh">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const logbox = document.getElementById('logbox');
+const linesInput = document.getElementById('lines');
+const nlines = document.getElementById('nlines');
+const refreshBtn = document.getElementById('refresh');
+
+async function fetchLog() {
+  const n = parseInt(linesInput.value||'200', 10);
+  nlines.textContent = n;
+  try {
+    const resp = await fetch('/tail?n=' + n, {cache:'no-store'});
+    if (!resp.ok) {
+      logbox.textContent = 'No log yet or error ' + resp.status;
+      return;
+    }
+    const text = await resp.text();
+    logbox.textContent = text;
+    // auto-scroll to bottom
+    logbox.scrollTop = logbox.scrollHeight;
+  } catch (e) {
+    logbox.textContent = 'Fetch error: ' + e;
+  }
+}
+
+refreshBtn.addEventListener('click', fetchLog);
+setInterval(fetchLog, 2000);
+fetchLog();
+</script>
+</body>
+</html>
+"""
+    return Response(html, mimetype="text/html")
+
+# --- live trigger route ---
+@app.route("/live", methods=["POST"])
+@requires_auth
+def trigger_live():
+    import os, subprocess
+    env = os.environ.copy()
+    env["LIVE"] = "1"
+    log_path = "/opt/bitunix-bot/logs/live_trigger.log"
+    with open(log_path, "a") as log:
+        subprocess.Popen(
+            ["/opt/bitunix-bot/venv/bin/python3", "/opt/bitunix-bot/gridbot_latest.py"],
+            stdout=log,
+            stderr=log,
+            env=env,
+        )
+    return jsonify({"status": "LIVE gridbot started"}), 200
+# --- end live trigger ---
+
+from flask import Response, request
+import os, collections, itertools
+
+def _tail(path, n=200):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return "".join(collections.deque(f, maxlen=n))
+    except FileNotFoundError:
+        return "No status yet."
+
+@app.get("/status.txt")
+def status_txt():
+    lines = int(request.args.get("lines", 200))
+    return Response(_tail("/opt/bitunix-bot/logs/gridbot.log", lines), mimetype="text/plain")

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 import os, time, json, requests, subprocess
 from decimal import Decimal
 from dotenv import load_dotenv

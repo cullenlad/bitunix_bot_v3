@@ -1,0 +1,135 @@
+#!/opt/bitunix-bot/venv/bin/python3
+import os, time, sys, json, logging, requests
+from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_URL = "https://api.bitunix.com"
+API_KEY = os.getenv("BITUNIX_API_KEY", "")
+API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
+SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
+LIVE = os.getenv("LIVE", "0") == "1"
+GRID_SPACING_PCT = float(os.getenv("GRID_SPACING_PCT", "0.25"))         # USDT distance top/bottom from mid
+GRID_LEVELS = int(os.getenv("GRID_LEVELS", "1"))       # levels each side
+ACCOUNT_USDT = float(os.getenv("ACCOUNT_USDT", "1000"))
+ORDER_NOTIONAL_PCT = float(os.getenv("ORDER_NOTIONAL_PCT", "0.07"))
+MAX_GRID_NOTIONAL_USDT = float(os.getenv("MAX_GRID_NOTIONAL_USDT", "400"))
+MIN_QTY = float(os.getenv("MIN_QTY", "0.001"))      # notional sizing basis
+
+LOG_DIR = "/opt/bitunix-bot/logs"
+LOG_FILE = f"{LOG_DIR}/gridbot.log"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+def _post(endpoint, data):
+    url = f"{BASE_URL}{endpoint}"
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": API_KEY
+    }
+    resp = requests.post(url, headers=headers, json=data, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def get_price(symbol):
+    # Try BitUnix first
+    try:
+        r = requests.get(f"{BASE_URL}/api/v1/market/ticker?symbol={symbol}", timeout=10)
+        j = r.json()
+        last = None
+        if isinstance(j, dict):
+            d = j.get('data')
+            if isinstance(d, dict):
+                last = d.get('last') or d.get('lastPrice') or d.get('price')
+            elif isinstance(d, list) and d:
+                first = d[0]
+                if isinstance(first, dict):
+                    last = first.get('last') or first.get('lastPrice') or first.get('price')
+            if last is None:
+                last = j.get('last') or j.get('lastPrice') or j.get('price')
+        elif isinstance(j, list) and j:
+            first = j[0]
+            if isinstance(first, dict):
+                last = first.get('last') or first.get('lastPrice') or first.get('price')
+        if last is not None:
+            return float(last)
+    except Exception as e:
+        logging.error(f"Primary price fetch failed: {e}")
+    # Fallback to Binance BTCUSDT spot ticker (public endpoint)
+    try:
+        r = requests.get('https://api.binance.com/api/v3/ticker/price', params={'symbol': 'BTCUSDT'}, timeout=10)
+        bj = r.json()
+        if isinstance(bj, dict) and 'price' in bj:
+            return float(bj['price'])
+    except Exception as e:
+        logging.error(f"Binance price fetch failed: {e}")
+    return None
+
+def change_leverage(symbol, leverage):
+    body = {"symbol": symbol, "leverage": int(leverage), "marginCoin": "USDT"}
+    try:
+        j = _post("/api/v1/futures/account/change_leverage", body)
+        logging.info(f"Leverage API response: {j}")
+        if j.get("code") == 0:
+            logging.info(f"✓ Leverage set to {leverage}x for {symbol}")
+            return j
+        raise RuntimeError(j)
+    except Exception as e:
+        raise RuntimeError({"error": str(e), "body": body})
+
+def place_order(symbol, side, price, size):
+    body = {
+        "symbol": symbol,
+        "price": price,
+        "size": size,
+        "side": side,
+        "orderType": "limit",
+        "marginCoin": "USDT"
+    }
+    if not LIVE:
+        logging.info(f"[DRY RUN] {side} {size} {symbol} @ {price}")
+        return {"dry_run": True, "body": body}
+    try:
+        j = _post("/api/v1/futures/order/place_order", body)
+        logging.info(f"Order API response: {j}")
+        return j
+    except Exception as e:
+        raise RuntimeError({"error": str(e), "body": body})
+
+def build_grid(mid_price, levels, spacing_pct, account_usdt):
+    step = mid_price * (spacing_pct / 100.0)  # dollar spacing between levels
+    # size: % of account per order, capped by MIN_QTY
+    per_order_usdt = account_usdt * (ORDER_NOTIONAL_PCT / 100.0)
+    per_order_usdt = min(per_order_usdt, MAX_GRID_NOTIONAL_USDT / max(1, (levels * 2)))
+    qty = max(MIN_QTY, round(per_order_usdt / max(mid_price, 1), 6))
+    grid = []
+    for i in range(1, levels + 1):
+        grid.append({"side": "buy",  "price": round(mid_price - i * step, 2), "size": qty})
+        grid.append({"side": "sell", "price": round(mid_price + i * step, 2), "size": qty})
+    return grid
+
+def main():
+    mode = "LIVE" if LIVE else "DRY-RUN"
+    logging.info(f"{mode} GRIDBOT for {SYMBOL} started")
+    price = get_price(SYMBOL)
+    if not price:
+        logging.error("Cannot fetch current price — exiting")
+        return
+    grid = build_grid(price, GRID_LEVELS, GRID_SPACING_PCT, ACCOUNT_USDT)
+    logging.info(f"Placing {len(grid)} orders around mid={price}")
+    for o in grid:
+        place_order(SYMBOL, o["side"], o["price"], o["size"])
+        time.sleep(0.25)
+    logging.info("Grid placement complete.")
+
+if __name__ == "__main__":
+    main()

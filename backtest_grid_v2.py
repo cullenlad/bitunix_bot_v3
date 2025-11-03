@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # Author: IanMS trader
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 import os, math
 from decimal import Decimal, ROUND_DOWN
 import pandas as pd
@@ -82,7 +84,7 @@ for _,row in df.iterrows():
         max_open = len(open_legs)
 
 net = realized - fees
-print({
+logging.info({
     "used_timeframe": TIMEFRAME,
     "used_limit": len(df),
     "grid_levels": GRID_LEVELS,

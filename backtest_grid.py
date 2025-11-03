@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # Author: IanMS trader
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 import os, math
 from decimal import Decimal
 import pandas as pd
@@ -80,7 +82,7 @@ for _,row in df.iterrows():
 
 gross_fees = Decimal("0")
 net = realized - gross_fees
-print({
+logging.info({
     "candles": len(df),
     "timeframe": TIMEFRAME,
     "grid_levels": GRID_LEVELS,
