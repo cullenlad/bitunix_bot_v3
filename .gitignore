@@ -20,3 +20,6 @@ venv/
 logs/
 backups/
 trades.csv
+venv/
+backups/
+*.csv
