@@ -1,6 +1,7 @@
 
 # --- requires_auth (autoinsert) ---
 import os
+from killswitch import cancel_all_orders
 from flask import request, jsonify
 
 def requires_auth(func):
@@ -379,3 +380,28 @@ def _tail(path, n=200):
 def status_txt():
     lines = int(request.args.get("lines", 200))
     return Response(_tail("/opt/bitunix-bot/logs/gridbot.log", lines), mimetype="text/plain")
+
+@app.post("/api/killswitch")
+def http_killswitch():
+    live = os.getenv("LIVE", "0")
+    symbol = os.getenv("SYMBOL", "BTCUSDT")
+    if live != "1":
+        return {"ok": False, "error": "LIVE=0; not arming killswitch"}, 403
+    try:
+        resp = cancel_all_orders(symbol)
+        import json
+        try:
+            data = json.loads(resp) if isinstance(resp, str) else resp
+        except Exception:
+            data = {"raw": resp}
+        ok = isinstance(data, dict) and str(data.get("code")) == "0"
+        if ok:
+            return {"ok": True, "response": data}
+        return {"ok": False, "error": data, "hint":"Exchange returned System error. Try again shortly; if persists, use manual cancel in the exchange UI."}, 502
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 500
+        ok = isinstance(data, dict) and str(data.get("code")) == "0"
+        if ok:
+            return {"ok": True, "response": data}
+        return {"ok": False, "error": data, "hint":"Exchange returned System error. Try again shortly; if persists, use manual cancel in the exchange UI."}, 502
+

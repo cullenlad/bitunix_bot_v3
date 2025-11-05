@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import os, json, time, hashlib, random, string, logging
+from grid_guard import decision as grid_guard_decision
+from grid_guard import csv_read_band as _read_csv_band
+from killswitch import cancel_all_orders
+from grid_guard import guard_pause_if_outside as _guard_pause_if_outside
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -55,7 +60,7 @@ def get_price():
         logging.error(f"get_price() failed: {e}")
         return None
 
-def cancel_all_orders():
+def _bot_cancel_all_orders():
     url = f"{BASE_URL}/api/v1/futures/trade/cancel_all"
     body_dict = {"symbol": SYMBOL}
     body = json.dumps(body_dict, separators=(",", ":"))
@@ -109,6 +114,17 @@ def run_grid(mode="LIVE"):
         prices.append((price * (1 + spacing * i)).quantize(Decimal("0.01")))
 
     logging.info(f"Placing {len(prices)} orders around mid={price}")
+    lo, hi = _read_csv_band(ORDERS_FILE)
+    if lo is not None and hi is not None:
+        print(f"DEBUG csv_band=({lo},{hi})")
+        if grid_guard_decision(float(price), float(lo), float(hi)) == "pause":
+            print(f"DEBUG GUARD-PAUSED by csv band mid={price} band=({lo},{hi})")
+            return
+    print(f"DEBUG mid={price} band=({min(prices)},{max(prices)})")
+    if _guard_pause_if_outside(float(price), [float(x) for x in prices]):
+        logging.info(f"[GUARD] paused outside band: mark={price}, band=({min(prices)},{max(prices)})")
+        print(f"DEBUG GUARD-PAUSED mid={price} band=({min(prices)},{max(prices)})")
+        return
 
     for p in prices:
         side = "BUY" if p < price else "SELL"
@@ -126,3 +142,32 @@ def run_grid(mode="LIVE"):
 
 if __name__ == "__main__":
     run_grid("LIVE" if not DRY_RUN else "DRY-RUN")
+
+# def _guard_pause_if_outside(mark_price: float, grid_prices: list[float]) -> bool:
+#     if not grid_prices:
+#         return False
+
+def _read_csv_band(path: str):
+    try:
+        lo = None
+        hi = None
+        with open(path, "r") as f:
+            first = True
+            for line in f:
+                if first:
+                    first = False
+                    continue
+                parts = line.strip().split(",")
+                if len(parts) < 5:
+                    continue
+                try:
+                    p = float(parts[4])
+                except Exception:
+                    continue
+                if lo is None or p < lo:
+                    lo = p
+                if hi is None or p > hi:
+                    hi = p
+        return lo, hi
+    except Exception:
+        return None, None
