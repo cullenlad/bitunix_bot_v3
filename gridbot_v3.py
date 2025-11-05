@@ -115,6 +115,13 @@ def run_grid(mode="LIVE"):
 
     logging.info(f"Placing {len(prices)} orders around mid={price}")
     lo, hi = _read_csv_band(ORDERS_FILE)
+    try:
+        mt = os.path.getmtime(ORDERS_FILE)
+        max_age = int(os.getenv("GRID_GUARD_REQUIRE_RECENT_MINUTES","180"))*60
+        if time.time() - mt > max_age:
+            lo = hi = None
+    except Exception:
+        pass
     if lo is not None and hi is not None:
         print(f"DEBUG csv_band=({lo},{hi})")
         if grid_guard_decision(float(price), float(lo), float(hi)) == "pause":

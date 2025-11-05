@@ -166,6 +166,7 @@ pre{background:#f6f6f6;padding:10px;border-radius:10px;overflow:auto}
 <button onclick="act('golive')">Go Live + Place Grid</button>
 <button onclick="act('recenter')">Re-center</button>
 <button onclick="act('killswitch')" style="background:#fee">Kill-Switch</button>
+<button onclick="act('newgrid')" style="background:#cfc">Start New Grid</button>
         <a class="btn" href="/dashboard">📊 Dashboard</a>
 <a href="/download" style="margin-left:8px">Download status.csv</a>
 </div>
@@ -405,3 +406,31 @@ def http_killswitch():
             return {"ok": True, "response": data}
         return {"ok": False, "error": data, "hint":"Exchange returned System error. Try again shortly; if persists, use manual cancel in the exchange UI."}, 502
 
+
+from flask import Response
+
+
+from flask import Response
+
+@app.post("/api/newgrid")
+def api_newgrid():
+    import os, time, shutil, json
+    a = request.authorization
+    u = os.getenv("PANEL_USER","")
+    p = os.getenv("PANEL_PASS","")
+    if not a or a.username != u or a.password != p:
+        r = Response("Authentication required", 401)
+        r.headers["WWW-Authenticate"] = 'Basic realm="GridPanel"'
+        return r
+    src = "/opt/bitunix-bot/orders.csv"
+    try:
+        if not os.path.exists(src):
+            return {"ok": False, "error": "orders.csv not found"}, 404
+        ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        dst = f"/opt/bitunix-bot/backups/orders_{ts}.csv"
+        os.makedirs("/opt/bitunix-bot/backups", exist_ok=True)
+        shutil.move(src, dst)
+        open(src, "w").close()
+        return {"ok": True, "archived": dst}, 200
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 500
