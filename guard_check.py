@@ -1,3 +1,16 @@
+import json
+def _pick_mark(obj):
+    d = obj.get('data') if isinstance(obj, dict) else None
+    if isinstance(d, list) and d:
+        d = d[0]
+    if isinstance(d, dict):
+        for k in ('markPrice','price','last','indexPrice','lastPrice'):
+            v = d.get(k)
+            if v not in (None, ''):
+                try: return float(v)
+                except: pass
+    return None
+
 import os, json, sys, requests
 from dotenv import load_dotenv
 
@@ -28,7 +41,7 @@ def get_mark_via_panel():
     raise RuntimeError("panel /status returned no mark price")
 
 def get_mark_via_bitunix():
-    url = "https://www.bitunix.com/api/v1/futures/market/tickers"
+    url = "https://fapi.bitunix.com/api/v1/futures/market/tickers"
     r = requests.get(url, params={"symbol": symbol}, timeout=10)
     r.raise_for_status()
     j = r.json()
