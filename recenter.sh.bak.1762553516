@@ -1,6 +1,3 @@
-exec 9>/.recenter.lock
-flock -n 9 || { echo "[recenter] already running"; exit 0; }
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -29,15 +26,7 @@ if [[ "${1:-}" == "--force-now" ]]; then
     echo "LIVE=0 -> dry-run force recenter"
   fi
   
-TMP_OUT=$(mktemp)
-python gridbot_latest.py | tee -a logs/gridbot.log | tee "$TMP_OUT"
-MID=$(awk 'match($0,/mid=([0-9.]+)/,m){v=m[1]} END{if(v)print v}' "$TMP_OUT")
-if [ -n "$MID" ]; then
-  printf '{ "center": %s }
-' "$MID" > "${LAST_CENTER_PATH:-/opt/bitunix-bot/last_center_BTCUSDT.json}"
-  echo "[center] -> $MID"
-fi
-rm -f "$TMP_OUT"
+python gridbot_latest.py
 # auto-sync guard center from last successful placement
 python - <<'PY2'
 import re,json,os,pathlib
@@ -91,15 +80,7 @@ if is_outside "$GUARD_OUT"; then
     echo "LIVE=0 -> dry-run recenter (after outside timeout)"
   fi
 
-TMP_OUT=$(mktemp)
-python gridbot_latest.py | tee -a logs/gridbot.log | tee "$TMP_OUT"
-MID=$(awk 'match($0,/mid=([0-9.]+)/,m){v=m[1]} END{if(v)print v}' "$TMP_OUT")
-if [ -n "$MID" ]; then
-  printf '{ "center": %s }
-' "$MID" > "${LAST_CENTER_PATH:-/opt/bitunix-bot/last_center_BTCUSDT.json}"
-  echo "[center] -> $MID"
-fi
-rm -f "$TMP_OUT"
+  python gridbot_latest.py
   rm -f "$OUTSIDE_FILE"
   exit 0
 fi
@@ -112,15 +93,7 @@ else
   echo "LIVE=0 -> dry-run recenter"
 fi
 
-TMP_OUT=$(mktemp)
-python gridbot_latest.py | tee -a logs/gridbot.log | tee "$TMP_OUT"
-MID=$(awk 'match($0,/mid=([0-9.]+)/,m){v=m[1]} END{if(v)print v}' "$TMP_OUT")
-if [ -n "$MID" ]; then
-  printf '{ "center": %s }
-' "$MID" > "${LAST_CENTER_PATH:-/opt/bitunix-bot/last_center_BTCUSDT.json}"
-  echo "[center] -> $MID"
-fi
-rm -f "$TMP_OUT"
+python gridbot_latest.py
   rm -f "$OUTSIDE_FILE"
   exit 0
 else
@@ -133,12 +106,4 @@ else
   echo "LIVE=0 -> dry-run recenter"
 fi
 
-TMP_OUT=$(mktemp)
-python gridbot_latest.py | tee -a logs/gridbot.log | tee "$TMP_OUT"
-MID=$(awk 'match($0,/mid=([0-9.]+)/,m){v=m[1]} END{if(v)print v}' "$TMP_OUT")
-if [ -n "$MID" ]; then
-  printf '{ "center": %s }
-' "$MID" > "${LAST_CENTER_PATH:-/opt/bitunix-bot/last_center_BTCUSDT.json}"
-  echo "[center] -> $MID"
-fi
-rm -f "$TMP_OUT"
+python gridbot_latest.py

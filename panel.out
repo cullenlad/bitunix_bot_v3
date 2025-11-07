@@ -1,0 +1,10 @@
+nohup: ignoring input
+ * Serving Flask app 'app'
+ * Debug mode: off
+2025-11-05 12:48:06,225 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.1.108:8000
+2025-11-05 12:48:06,225 [INFO] [33mPress CTRL+C to quit[0m
+2025-11-05 12:48:07,104 [INFO] 127.0.0.1 - - [05/Nov/2025 12:48:07] "[35m[1mPOST /api/newgrid HTTP/1.1[0m" 500 -
+2025-11-05 12:49:31,605 [INFO] 127.0.0.1 - - [05/Nov/2025 12:49:31] "POST /api/newgrid HTTP/1.1" 200 -

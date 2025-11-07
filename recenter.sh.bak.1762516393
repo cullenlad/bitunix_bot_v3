@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -d venv ]]; then
+  source venv/bin/activate
+elif [[ -d .venv ]]; then
+  source .venv/bin/activate
+fi
+
+export $(grep -v '^#' .env | xargs)
+
+GUARD_OUT="$(python -u guard_check.py 2>&1 || true)"
+echo "$GUARD_OUT"
+
+if echo "$GUARD_OUT" | grep -qi '^outside$'; then
+  echo "[recenter] grid guard tripped"
+  if [[ "${LIVE:-0}" = "1" ]]; then
+    echo "[recenter] killswitch"
+    python killswitch.py || true
+  fi
+  exit 0
+fi
+
+if [[ "${LIVE:-0}" = "1" ]]; then
+  echo "LIVE=1 -> killswitch then recenter"
+  python killswitch.py || true
+else
+  echo "LIVE=0 -> dry-run recenter"
+fi
+
+python gridbot_latest.py

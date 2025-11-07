@@ -1,0 +1,94 @@
+import os, time, json, hashlib, requests, sys
+from dotenv import load_dotenv
+load_dotenv()
+
+BASE = "https://www.bitunix.com"
+API_KEY = os.getenv("BITUNIX_API_KEY","")
+API_SECRET = os.getenv("BITUNIX_API_SECRET","")
+SYMBOL = os.getenv("SYMBOL","BTCUSDT")
+
+def _sign(ts:int, body:dict)->str:
+    b = json.dumps(body, separators=(",",":"))
+    first = hashlib.sha256((str(ts)+API_KEY+b).encode()).hexdigest()
+    return hashlib.sha256((first+API_SECRET).encode()).hexdigest()
+
+def _headers(ts:int, body:dict):
+    return {
+        "X-BITUNIX-APIKEY": API_KEY,
+        "X-BITUNIX-TIMESTAMP": str(ts),
+        "X-BITUNIX-SIGN": _sign(ts, body),
+        "Content-Type": "application/json",
+    }
+
+def _post(path:str, body:dict):
+    ts = int(time.time()*1000)
+    r = requests.post(BASE+path, headers=_headers(ts, body), data=json.dumps(body), timeout=15)
+    txt = r.text
+    try:
+        j = r.json()
+    except Exception:
+        print(f"[HTTP] {r.status_code} {path}\n{txt}", file=sys.stderr)
+        raise
+    if r.status_code != 200:
+        print(f"[HTTP] {r.status_code} {path}\n{json.dumps(j,indent=2)}", file=sys.stderr)
+        raise RuntimeError(f"HTTP {r.status_code}")
+    return j
+
+def _get(path:str, params:dict):
+    # Some Bitunix endpoints are GET without body; sign an empty body
+    ts = int(time.time()*1000)
+    r = requests.get(BASE+path, params=params, headers=_headers(ts, {}), timeout=15)
+    txt = r.text
+    try:
+        j = r.json()
+    except Exception:
+        print(f"[HTTP] {r.status_code} {path}\n{txt}", file=sys.stderr)
+        raise
+    if r.status_code != 200:
+        print(f"[HTTP] {r.status_code} {path}\n{json.dumps(j,indent=2)}", file=sys.stderr)
+        raise RuntimeError(f"HTTP {r.status_code}")
+    return j
+
+def get_position_size(symbol:str)->float:
+    # Try POST style first
+    try:
+        j = _post("/api/v1/futures/account/positions", {"symbol": symbol})
+        data = j.get("data") or []
+        for x in data:
+            if str(x.get("symbol","")).upper()==symbol.upper():
+                for key in ("positionAmt","size","positionQty","qty"):
+                    if key in x and x[key] is not None:
+                        return float(x[key])
+                # Some responses nest size under "position"
+                if "position" in x and "size" in x["position"]:
+                    return float(x["position"]["size"])
+    except Exception:
+        pass
+    # Fallback: GET style
+    j = _get("/api/v1/futures/account/positions", {"symbol": symbol})
+    data = j.get("data") or []
+    for x in data:
+        if str(x.get("symbol","")).upper()==symbol.upper():
+            for key in ("positionAmt","size","positionQty","qty"):
+                if key in x and x[key] is not None:
+                    return float(x[key])
+            if "position" in x and "size" in x["position"]:
+                return float(x["position"]["size"])
+    return 0.0
+
+def flatten(symbol:str):
+    q = get_position_size(symbol)
+    if abs(q) < 1e-12:
+        return {"flatten":"none","qty":0}
+    side = "SELL" if q>0 else "BUY"
+    body = {"symbol": symbol, "side": side, "type": "MARKET", "reduceOnly": True, "quantity": abs(q)}
+    j = _post("/api/v1/futures/trade/place_order", body)
+    return {"flatten":"sent","qty":abs(q),"side":side,"resp":j}
+
+if __name__ == "__main__":
+    try:
+        out = flatten(SYMBOL)
+        print(json.dumps(out))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)

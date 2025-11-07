@@ -1,0 +1,35 @@
+import os, time, json, hmac, hashlib, requests
+from dotenv import load_dotenv
+load_dotenv()
+BASE="https://www.bitunix.com"
+K=os.getenv("BITUNIX_API_KEY","")
+S=os.getenv("BITUNIX_API_SECRET","")
+SYM=os.getenv("SYMBOL","BTCUSDT")
+def sig(ts,body):
+    m=(str(ts)+K+json.dumps(body,separators=(',',':'))).encode()
+    h=hashlib.sha256(m).hexdigest().encode()
+    return hashlib.sha256(h+S.encode()).hexdigest()
+def post(p,body):
+    ts=int(time.time()*1000)
+    headers={"X-BITUNIX-APIKEY":K,"X-BITUNIX-TIMESTAMP":str(ts),"X-BITUNIX-SIGN":sig(ts,body),"Content-Type":"application/json"}
+    r=requests.post(BASE+p,headers=headers,data=json.dumps(body),timeout=10)
+    r.raise_for_status()
+    return r.json()
+def get_pos(sym):
+    r=post("/api/v1/futures/account/positions",{"symbol":sym})
+    d=r.get("data",[])
+    for x in d:
+        if str(x.get("symbol")).upper()==sym.upper():
+            q=float(x.get("positionAmt") or x.get("size") or 0)
+            return q
+    return 0.0
+def flatten(sym):
+    q=get_pos(sym)
+    if abs(q)<1e-9:
+        return {"flatten":"none"}
+    side="SELL" if q>0 else "BUY"
+    body={"symbol":sym,"side":side,"type":"MARKET","reduceOnly":True,"quantity":abs(q)}
+    r=post("/api/v1/futures/trade/place_order",body)
+    return {"flatten":"sent","qty":abs(q),"side":side,"resp":r}
+if __name__=="__main__":
+    print(json.dumps(flatten(SYM)))

@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+import os, requests, json, logging, time, random, string, hashlib
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_URL = "https://fapi.bitunix.com"
+API_KEY = os.getenv("BITUNIX_API_KEY")
+API_SECRET = os.getenv("BITUNIX_API_SECRET")
+SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
+LIVE = os.getenv("LIVE", "0") == "1"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("/opt/bitunix-bot/logs/killswitch.log"),
+        logging.StreamHandler()
+    ]
+)
+
+def _sha256_hex(s):
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def _nonce():
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+
+def cancel_all_orders(symbol):
+    nonce = _nonce()
+    ts = str(int(time.time() * 1000))
+    body = {"symbol": symbol}
+    digest = _sha256_hex(nonce + ts + API_KEY + json.dumps(body))
+    sign = _sha256_hex(digest + API_SECRET)
+    headers = {
+        "api-key": API_KEY,
+        "sign": sign,
+        "nonce": nonce,
+        "timestamp": ts,
+        "language": "en-US",
+        "Content-Type": "application/json"
+    }
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            r = requests.post(f"{BASE_URL}/api/v1/futures/trade/cancel_all",
+                              headers=headers, json=body, timeout=3)
+            logging.info({"killswitch_http": r.status_code, "attempt": attempt})
+            logging.info({"killswitch_body": r.text})
+            return r.text
+        except Exception as e:
+            last_err = e
+            logging.error({"killswitch_error": str(e), "attempt": attempt})
+            time.sleep(0.5)
+    return json.dumps({"code": -1, "msg": f"killswitch failed: {last_err}"})
+
+if __name__ == "__main__":
+    if not LIVE:
+        logging.info({"error": "LIVE is 0; set LIVE=1 in .env to arm killswitch"})
+    else:
+        logging.info(f"Executing killswitch for {SYMBOL}")
+        result = cancel_all_orders(SYMBOL)
+        logging.info({"response": result})
